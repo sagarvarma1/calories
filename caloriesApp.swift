@@ -7,6 +7,34 @@
 
 import SwiftUI
 import FirebaseCore
+import FirebaseFirestore
+
+struct LoadingDataView: View {
+    var body: some View {
+        VStack(spacing: 30) {
+            Spacer()
+            
+            VStack(spacing: 20) {
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                
+                Text("Getting Data")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                
+                Text("Loading your profile...")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
@@ -47,12 +75,24 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 struct caloriesApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var authManager = AuthenticationManager()
+    @StateObject private var userProfile = UserProfile()
     
     var body: some Scene {
         WindowGroup {
             if authManager.isAuthenticated {
-                MacroTrackingView()
-                    .environmentObject(authManager)
+                if userProfile.isLoading {
+                    LoadingDataView()
+                        .environmentObject(authManager)
+                        .environmentObject(userProfile)
+                } else if userProfile.hasCompletedOnboarding {
+                    MacroTrackingView()
+                        .environmentObject(authManager)
+                        .environmentObject(userProfile)
+                } else {
+                    OnboardingFlow(userProfile: userProfile)
+                        .environmentObject(authManager)
+                        .environmentObject(userProfile)
+                }
             } else {
                 WelcomeView()
                     .environmentObject(authManager)
