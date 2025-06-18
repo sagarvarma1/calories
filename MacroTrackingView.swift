@@ -1,5 +1,17 @@
 import SwiftUI
 
+struct MealAnalysisResult {
+    let mealName: String
+    let calories: Double
+    let protein: Double
+    let carbs: Double
+    let fat: Double
+    let fiber: Double
+    let sugar: Double
+    let sodium: Double
+    let description: String
+}
+
 struct MacroTrackingView: View {
     @StateObject private var authManager = AuthenticationManager()
     @State private var caloriesConsumed: Double = 0
@@ -19,6 +31,16 @@ struct MacroTrackingView: View {
     @State private var mealDescriptionText = ""
     @State private var selectedImage: UIImage?
     @State private var currentMealDescription: String = ""
+    @State private var analyzedMealData: MealAnalysisResult?
+    @State private var isAnalyzing: Bool = false
+    @State private var lastAddedMeal: MealAnalysisResult?
+    @State private var analyzedPhotos: [(UIImage, MealAnalysisResult)] = []
+    @State private var analyzedTextMeals: [MealAnalysisResult] = []
+    @State private var acceptProgress: Double = 0.0
+    @State private var acceptTimer: Timer?
+    @State private var flippedPhotoIndices: Set<Int> = []
+    @State private var showingDeleteConfirmation = false
+    @State private var mealToDelete: (index: Int, meal: MealAnalysisResult, isPhoto: Bool)?
     
     // Daily goals (can be made customizable later)
     private let calorieGoal: Double = 2000
@@ -36,33 +58,142 @@ struct MacroTrackingView: View {
                 VStack(spacing: 24) {
                     // Dynamic Upload Photo/Description Section
                     VStack(spacing: 0) {
-                        if let selectedImage = selectedImage {
-                            // Display Photo Mode
-                            ZStack(alignment: .topTrailing) {
-                                Image(uiImage: selectedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(height: 200)
-                                    .clipped()
-                                    .cornerRadius(16)
+                        if let analyzedMeal = analyzedMealData {
+                            // Display Analyzed Meal Mode - Accept/Delete interface
+                            VStack(spacing: 20) {
+                                // Meal Name
+                                Text(analyzedMeal.mealName)
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.center)
                                 
-                                // X button to clear photo
-                                Button(action: {
-                                    self.selectedImage = nil
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(.white)
-                                        .background(Color.black.opacity(0.6))
-                                        .clipShape(Circle())
+                                // Macro List
+                                VStack(spacing: 8) {
+                                    MacroRow(title: "Calories", value: Int(analyzedMeal.calories), unit: "cal", color: .orange)
+                                    MacroRow(title: "Protein", value: Int(analyzedMeal.protein), unit: "g", color: .red)
+                                    MacroRow(title: "Carbs", value: Int(analyzedMeal.carbs), unit: "g", color: .blue)
+                                    MacroRow(title: "Fat", value: Int(analyzedMeal.fat), unit: "g", color: .green)
+                                    MacroRow(title: "Fiber", value: Int(analyzedMeal.fiber), unit: "g", color: .brown)
+                                    MacroRow(title: "Sugar", value: Int(analyzedMeal.sugar), unit: "g", color: .pink)
+                                    MacroRow(title: "Sodium", value: Int(analyzedMeal.sodium), unit: "mg", color: .purple)
                                 }
-                                .padding(12)
+                                
+                                // Accept/Delete Buttons
+                                HStack(spacing: 16) {
+                                    // Delete Button
+                                    Button(action: {
+                                        deleteMeal()
+                                    }) {
+                                        Text("Delete")
+                                            .fontWeight(.semibold)
+                                            .frame(maxWidth: .infinity)
+                                            .padding()
+                                            .background(Color.red)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(12)
+                                    }
+                                    
+                                    // Accept Button with Progress
+                                    Button(action: {
+                                        acceptMeal()
+                                    }) {
+                                        ZStack {
+                                            // Background
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .fill(Color.green)
+                                                .frame(maxWidth: .infinity)
+                                            
+                                            // Progress overlay
+                                            GeometryReader { geometry in
+                                                HStack {
+                                                    RoundedRectangle(cornerRadius: 12)
+                                                        .fill(Color.black.opacity(0.4))
+                                                        .frame(width: geometry.size.width * acceptProgress)
+                                                    Spacer(minLength: 0)
+                                                }
+                                            }
+                                            
+                                            Text("Accept")
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(.white)
+                                        }
+                                        .frame(height: 50)
+                                    }
+                                }
+                            }
+                            .padding(20)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(16)
+                            .padding(.horizontal)
+                            .padding(.top)
+                            .onAppear {
+                                startAcceptTimer()
+                            }
+                            .onDisappear {
+                                stopAcceptTimer()
+                            }
+                        } else if isAnalyzing {
+                            // Display Analysis Loading Mode
+                            VStack(spacing: 20) {
+                                ProgressView()
+                                    .scaleEffect(1.2)
+                                Text("Analyzing your meal...")
+                                    .font(.headline)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(height: 200)
+                            .frame(maxWidth: .infinity)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(16)
+                            .padding(.horizontal)
+                            .padding(.top)
+                        } else if let selectedImage = selectedImage {
+                            // Display Photo Mode
+                            VStack(spacing: 16) {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(uiImage: selectedImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fill)
+                                        .frame(height: 200)
+                                        .clipped()
+                                        .cornerRadius(16)
+                                    
+                                    // X button to clear photo
+                                    Button(action: {
+                                        self.selectedImage = nil
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 24))
+                                            .foregroundColor(.white)
+                                            .background(Color.black.opacity(0.6))
+                                            .clipShape(Circle())
+                                    }
+                                    .padding(12)
+                                }
+                                
+                                // Analyze Button
+                                Button(action: {
+                                    analyzePhoto()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "camera.viewfinder")
+                                            .font(.system(size: 16))
+                                        Text("Analyze Photo")
+                                            .fontWeight(.semibold)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
                             }
                             .padding(.horizontal)
                             .padding(.top)
                         } else if !currentMealDescription.isEmpty {
                             // Display Description Mode
-                            VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 16) {
                                 HStack {
                                     Text("Meal Description")
                                         .font(.headline)
@@ -88,95 +219,112 @@ struct MacroTrackingView: View {
                                     .background(Color(.systemGray6))
                                     .cornerRadius(12)
                                     .fixedSize(horizontal: false, vertical: true)
+                                
+                                // Analyze Button for Text
+                                Button(action: {
+                                    analyzeText()
+                                }) {
+                                    HStack {
+                                        Image(systemName: "text.magnifyingglass")
+                                            .font(.system(size: 16))
+                                        Text("Analyze Meal")
+                                            .fontWeight(.semibold)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding()
+                                    .background(Color.green)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(12)
+                                }
                             }
                             .padding(.horizontal)
                             .padding(.top)
                         } else {
                             // Default Two Button Mode
-                            HStack(spacing: 12) {
-                                // Upload Photo Button (Left Half)
-                                Button(action: {
-                                    showingImageSourcePicker = true
-                                }) {
-                                    VStack(spacing: 12) {
-                                        Image(systemName: "camera.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.blue)
-                                        
-                                        Text("Upload Photo of Meal")
-                                            .font(.subheadline)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.primary)
-                                            .multilineTextAlignment(.center)
-                                            .lineLimit(2)
-                                        
-                                        Text("Take a photo")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .padding(.vertical, 24)
-                                    .padding(.horizontal, 12)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .fill(Color(.systemGray6))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 16)
-                                                    .stroke(Color.blue.opacity(0.3), lineWidth: 2)
-                                                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                                            )
-                                    )
-                                }
-                                .frame(height: 140)
+                    HStack(spacing: 12) {
+                        // Upload Photo Button (Left Half)
+                        Button(action: {
+                            showingImageSourcePicker = true
+                        }) {
+                            VStack(spacing: 12) {
+                                Image(systemName: "camera.fill")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.blue)
                                 
-                                // OR Separator
-                                VStack {
-                                    Text("OR")
-                                        .font(.caption)
-                                        .fontWeight(.medium)
-                                        .foregroundColor(.secondary)
-                                }
-                                .frame(width: 30)
+                                Text("Upload Photo of Meal")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
                                 
-                                // Describe Meal Button (Right Half)
-                                Button(action: {
-                                    showingMealDescription = true
-                                }) {
-                                    VStack(spacing: 12) {
-                                        Image(systemName: "text.bubble.fill")
-                                            .font(.system(size: 32))
-                                            .foregroundColor(.green)
-                                        
-                                        Text("Describe Meal")
-                                            .font(.subheadline)
-                                            .fontWeight(.semibold)
-                                            .foregroundColor(.primary)
-                                            .multilineTextAlignment(.center)
-                                            .lineLimit(2)
-                                        
-                                        Text("Type what you ate")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .multilineTextAlignment(.center)
-                                    }
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .padding(.vertical, 24)
-                                    .padding(.horizontal, 12)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .fill(Color(.systemGray6))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 16)
-                                                    .stroke(Color.green.opacity(0.3), lineWidth: 2)
-                                                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                                            )
-                                    )
-                                }
-                                .frame(height: 140)
+                                Text("Take a photo")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
                             }
-                            .padding(.horizontal)
-                            .padding(.top)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.vertical, 24)
+                            .padding(.horizontal, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(.systemGray6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                                    )
+                            )
+                        }
+                        .frame(height: 140)
+                        
+                        // OR Separator
+                        VStack {
+                            Text("OR")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(width: 30)
+                        
+                        // Describe Meal Button (Right Half)
+                        Button(action: {
+                            showingMealDescription = true
+                        }) {
+                            VStack(spacing: 12) {
+                                Image(systemName: "text.bubble.fill")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.green)
+                                
+                                Text("Describe Meal")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(2)
+                                
+                                Text("Type what you ate")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.vertical, 24)
+                            .padding(.horizontal, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(.systemGray6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.green.opacity(0.3), lineWidth: 2)
+                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                                    )
+                            )
+                        }
+                        .frame(height: 140)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top)
                         }
                     }
                     
@@ -199,7 +347,8 @@ struct MacroTrackingView: View {
                                 consumed: caloriesConsumed,
                                 goal: calorieGoal,
                                 unit: "cal",
-                                color: .orange
+                                color: .orange,
+                                lastAdded: lastAddedMeal?.calories
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Calories",
@@ -217,7 +366,8 @@ struct MacroTrackingView: View {
                                 consumed: proteinConsumed,
                                 goal: proteinGoal,
                                 unit: "g",
-                                color: .red
+                                color: .red,
+                                lastAdded: lastAddedMeal?.protein
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Protein",
@@ -235,7 +385,8 @@ struct MacroTrackingView: View {
                                 consumed: carbsConsumed,
                                 goal: carbGoal,
                                 unit: "g",
-                                color: .blue
+                                color: .blue,
+                                lastAdded: lastAddedMeal?.carbs
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Carbohydrates",
@@ -256,7 +407,8 @@ struct MacroTrackingView: View {
                                 consumed: fatConsumed,
                                 goal: fatGoal,
                                 unit: "g",
-                                color: .green
+                                color: .green,
+                                lastAdded: lastAddedMeal?.fat
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Fats",
@@ -275,7 +427,8 @@ struct MacroTrackingView: View {
                                 consumed: fiberConsumed,
                                 goal: fiberGoal,
                                 unit: "g",
-                                color: .brown
+                                color: .brown,
+                                lastAdded: lastAddedMeal?.fiber
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Fiber",
@@ -292,7 +445,8 @@ struct MacroTrackingView: View {
                                 consumed: sugarConsumed,
                                 goal: sugarGoal,
                                 unit: "g",
-                                color: .pink
+                                color: .pink,
+                                lastAdded: lastAddedMeal?.sugar
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Sugar",
@@ -311,7 +465,8 @@ struct MacroTrackingView: View {
                                 consumed: sodiumConsumed,
                                 goal: sodiumGoal,
                                 unit: "mg",
-                                color: .purple
+                                color: .purple,
+                                lastAdded: lastAddedMeal?.sodium
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Sodium",
@@ -329,7 +484,8 @@ struct MacroTrackingView: View {
                                 consumed: vitaminsConsumed,
                                 goal: vitaminsGoal,
                                 unit: "%",
-                                color: .cyan
+                                color: .cyan,
+                                lastAdded: nil
                             ) {
                                 selectedMacro = MacroDetail(
                                     title: "Vitamins",
@@ -349,6 +505,55 @@ struct MacroTrackingView: View {
                         }
                     }
                     .padding(.horizontal, 12)
+                    
+                    // Analyzed Meals History Section
+                    if !analyzedPhotos.isEmpty || !analyzedTextMeals.isEmpty {
+                        VStack(spacing: 16) {
+                            HStack {
+                                Text("Today's Meals")
+                                    .font(.title2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+                            
+                            // Analyzed Photos
+                            ForEach(Array(analyzedPhotos.enumerated()), id: \.offset) { index, photoMeal in
+                                AnalyzedMealCard(
+                                    image: photoMeal.0,
+                                    meal: photoMeal.1,
+                                    isFlipped: flippedPhotoIndices.contains(index),
+                                    onDelete: {
+                                        mealToDelete = (index: index, meal: photoMeal.1, isPhoto: true)
+                                        showingDeleteConfirmation = true
+                                    },
+                                    onPhotoTap: {
+                                        if flippedPhotoIndices.contains(index) {
+                                            flippedPhotoIndices.remove(index)
+                                        } else {
+                                            flippedPhotoIndices.insert(index)
+                                        }
+                                    }
+                                )
+                            }
+                            
+                            // Analyzed Text Meals
+                            ForEach(Array(analyzedTextMeals.enumerated()), id: \.offset) { index, meal in
+                                AnalyzedMealCard(
+                                    image: nil,
+                                    meal: meal,
+                                    isFlipped: true, // Always show macro info for text meals
+                                    onDelete: {
+                                        mealToDelete = (index: index, meal: meal, isPhoto: false)
+                                        showingDeleteConfirmation = true
+                                    },
+                                    onPhotoTap: { } // No photo to tap
+                                )
+                            }
+                        }
+                        .padding(.top, 20)
+                    }
                     
                     Spacer(minLength: 100)
                 }
@@ -384,6 +589,16 @@ struct MacroTrackingView: View {
             .sheet(isPresented: $showingMealDescription) {
                 MealDescriptionView(mealDescription: $mealDescriptionText, currentMealDescription: $currentMealDescription)
             }
+            .alert("Delete Meal", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    mealToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    confirmDeleteMeal()
+                }
+            } message: {
+                Text("Are you sure you want to delete this meal? This will remove its macros from your daily total.")
+            }
         }
     }
     
@@ -392,6 +607,250 @@ struct MacroTrackingView: View {
         proteinConsumed += protein
         carbsConsumed += carbs
         fatConsumed += fat
+    }
+    
+    private func analyzePhoto() {
+        isAnalyzing = true
+        
+        // Simulate AI analysis delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            // Mock analysis result - replace with actual AI API call
+            let mockResult = MealAnalysisResult(
+                mealName: "Grilled Chicken Salad",
+                calories: 350,
+                protein: 35,
+                carbs: 12,
+                fat: 18,
+                fiber: 8,
+                sugar: 6,
+                sodium: 420,
+                description: "A healthy grilled chicken breast over mixed greens with vegetables and light dressing."
+            )
+            
+            self.analyzedMealData = mockResult
+            self.lastAddedMeal = mockResult  // Show "+ X added" during accept phase
+            self.isAnalyzing = false
+        }
+    }
+    
+    private func analyzeText() {
+        isAnalyzing = true
+        
+        // Simulate AI analysis delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            // Mock analysis result based on text - replace with actual AI API call
+            let mockResult = MealAnalysisResult(
+                mealName: "Mixed Bowl Meal",
+                calories: 280,
+                protein: 22,
+                carbs: 25,
+                fat: 12,
+                fiber: 5,
+                sugar: 8,
+                sodium: 350,
+                description: currentMealDescription
+            )
+            
+            self.analyzedMealData = mockResult
+            self.lastAddedMeal = mockResult  // Show "+ X added" during accept phase
+            self.isAnalyzing = false
+        }
+    }
+    
+    private func startAcceptTimer() {
+        acceptProgress = 0.0
+        acceptTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            acceptProgress += 0.00667 // Increment to reach 1.0 in 15 seconds (1.0 / 150 intervals)
+            
+            if acceptProgress >= 1.0 {
+                acceptMeal()
+            }
+        }
+    }
+    
+    private func stopAcceptTimer() {
+        acceptTimer?.invalidate()
+        acceptTimer = nil
+        acceptProgress = 0.0
+    }
+    
+    private func acceptMeal() {
+        guard let meal = analyzedMealData else { return }
+        
+        stopAcceptTimer()
+        
+        // Add to daily tracking
+        addMacros(
+            calories: meal.calories,
+            protein: meal.protein,
+            carbs: meal.carbs,
+            fat: meal.fat
+        )
+        fiberConsumed += meal.fiber
+        sugarConsumed += meal.sugar
+        sodiumConsumed += meal.sodium
+        
+        // Save to history
+        if let image = selectedImage {
+            analyzedPhotos.append((image, meal))
+        } else {
+            analyzedTextMeals.append(meal)
+        }
+        
+        // Reset state and clear "added" display immediately
+        analyzedMealData = nil
+        selectedImage = nil
+        currentMealDescription = ""
+        lastAddedMeal = nil  // Immediately revert to "/ X goal" format
+    }
+    
+    private func deleteMeal() {
+        stopAcceptTimer()
+        analyzedMealData = nil
+        selectedImage = nil
+        currentMealDescription = ""
+        lastAddedMeal = nil  // Clear "added" display when deleting
+    }
+    
+    private func confirmDeleteMeal() {
+        guard let mealToDelete = mealToDelete else { return }
+        
+        let meal = mealToDelete.meal
+        let index = mealToDelete.index
+        let isPhoto = mealToDelete.isPhoto
+        
+        // Subtract macros from daily total
+        subtractMacros(
+            calories: meal.calories,
+            protein: meal.protein,
+            carbs: meal.carbs,
+            fat: meal.fat
+        )
+        fiberConsumed = max(0, fiberConsumed - meal.fiber)
+        sugarConsumed = max(0, sugarConsumed - meal.sugar)
+        sodiumConsumed = max(0, sodiumConsumed - meal.sodium)
+        
+        // Remove from appropriate array
+        if isPhoto {
+            analyzedPhotos.remove(at: index)
+            flippedPhotoIndices.remove(index)
+        } else {
+            analyzedTextMeals.remove(at: index)
+        }
+        
+        // Clear selection
+        self.mealToDelete = nil
+    }
+    
+    private func subtractMacros(calories: Double, protein: Double, carbs: Double, fat: Double) {
+        caloriesConsumed = max(0, caloriesConsumed - calories)
+        proteinConsumed = max(0, proteinConsumed - protein)
+        carbsConsumed = max(0, carbsConsumed - carbs)
+        fatConsumed = max(0, fatConsumed - fat)
+    }
+}
+
+struct AnalyzedMealCard: View {
+    let image: UIImage?
+    let meal: MealAnalysisResult
+    let isFlipped: Bool
+    let onDelete: () -> Void
+    let onPhotoTap: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            // Header with meal name and delete button
+            HStack {
+                Text(meal.mealName)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16))
+                        .foregroundColor(.red)
+                }
+            }
+            
+            // Photo or Macro List (flippable for photos)
+            if let image = image {
+                if isFlipped {
+                    // Show Macro List
+                    VStack(spacing: 8) {
+                        MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
+                        MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
+                        MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
+                        MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
+                        MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
+                        MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
+                        MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
+                    }
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(12)
+                    .onTapGesture {
+                        onPhotoTap()
+                    }
+                } else {
+                    // Show Photo
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 120)
+                        .clipped()
+                        .cornerRadius(12)
+                        .onTapGesture {
+                            onPhotoTap()
+                        }
+                }
+            } else {
+                // Text meals always show macro list
+                VStack(spacing: 8) {
+                    MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
+                    MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
+                    MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
+                    MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
+                    MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
+                    MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
+                    MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+}
+
+struct MacroRow: View {
+    let title: String
+    let value: Int
+    let unit: String
+    let color: Color
+    
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            
+            Text(title)
+                .font(.body)
+                .foregroundColor(.primary)
+            
+            Spacer()
+            
+            Text("\(value) \(unit)")
+                .font(.body)
+                .fontWeight(.medium)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -406,6 +865,7 @@ struct SimpleMacroCard: View {
     let goal: Double
     let unit: String
     let color: Color
+    let lastAdded: Double?
     let onTap: () -> Void
     
     var body: some View {
@@ -425,11 +885,19 @@ struct SimpleMacroCard: View {
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundColor(.primary)
                     
+                    if let lastAdded = lastAdded {
+                        Text("+ \(Int(lastAdded)) \(unit) added")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    } else {
                     Text("/ \(Int(goal)) \(unit)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
+                    }
                 }
                 
                 // Small chevron indicator
