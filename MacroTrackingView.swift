@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import FirebaseAuth
 
 struct MealAnalysisResult {
     let mealName: String
@@ -13,44 +15,25 @@ struct MealAnalysisResult {
 }
 
 struct MacroTrackingView: View {
-    @StateObject private var authManager = AuthenticationManager()
-    @State private var caloriesConsumed: Double = 0
-    @State private var proteinConsumed: Double = 0
-    @State private var carbsConsumed: Double = 0
-    @State private var fatConsumed: Double = 0
-    @State private var fiberConsumed: Double = 0
-    @State private var sugarConsumed: Double = 0
-    @State private var sodiumConsumed: Double = 0
-    @State private var vitaminsConsumed: Double = 0
+    @ObservedObject var userProfile: UserProfile
+    @StateObject private var trackingManager = DailyTrackingManager()
+    @State private var uploadedImage: UIImage?
+    @State private var writtenDescription: String = ""
     @State private var showingImagePicker = false
     @State private var showingImageSourcePicker = false
-    @State private var imageSourceType: UIImagePickerController.SourceType = .camera
-    @State private var selectedMacro: MacroDetail?
-    @State private var showingMacroDetail = false
-    @State private var showingMealDescription = false
-    @State private var mealDescriptionText = ""
-    @State private var selectedImage: UIImage?
-    @State private var currentMealDescription: String = ""
-    @State private var analyzedMealData: MealAnalysisResult?
-    @State private var isAnalyzing: Bool = false
+    @State private var imagePickerSourceType: UIImagePickerController.SourceType = .camera
+    @State private var isAnalyzing = false
+    @State private var currentAnalysis: MealAnalysisResult?
+    @State private var showingAcceptDeleteView = false
     @State private var lastAddedMeal: MealAnalysisResult?
-    @State private var analyzedPhotos: [(UIImage, MealAnalysisResult)] = []
-    @State private var analyzedTextMeals: [MealAnalysisResult] = []
-    @State private var acceptProgress: Double = 0.0
-    @State private var acceptTimer: Timer?
-    @State private var flippedPhotoIndices: Set<Int> = []
+    @State private var autoAcceptTimer: Timer?
+    @State private var acceptTimerProgress: CGFloat = 0
+    @State private var flippedPhotoMealIndices: Set<String> = []
     @State private var showingDeleteConfirmation = false
-    @State private var mealToDelete: (index: Int, meal: MealAnalysisResult, isPhoto: Bool)?
-    
-    // Daily goals (can be made customizable later)
-    private let calorieGoal: Double = 2000
-    private let proteinGoal: Double = 150
-    private let carbGoal: Double = 200
-    private let fatGoal: Double = 65
-    private let fiberGoal: Double = 25
-    private let sugarGoal: Double = 50
-    private let sodiumGoal: Double = 2300
-    private let vitaminsGoal: Double = 100
+    @State private var mealToDelete: StoredMealData?
+    @State private var showingHistory = false
+    @State private var showingMealDescription = false
+    @State private var currentMealDescription: String = ""
     
     var body: some View {
         NavigationView {
@@ -58,7 +41,7 @@ struct MacroTrackingView: View {
                 VStack(spacing: 24) {
                     // Dynamic Upload Photo/Description Section
                     VStack(spacing: 0) {
-                        if let analyzedMeal = analyzedMealData {
+                        if let analyzedMeal = currentAnalysis {
                             // Display Analyzed Meal Mode - Accept/Delete interface
                             VStack(spacing: 20) {
                                 // Meal Name
@@ -109,7 +92,7 @@ struct MacroTrackingView: View {
                                                 HStack {
                                                     RoundedRectangle(cornerRadius: 12)
                                                         .fill(Color.black.opacity(0.4))
-                                                        .frame(width: geometry.size.width * acceptProgress)
+                                                        .frame(width: geometry.size.width * acceptTimerProgress)
                                                     Spacer(minLength: 0)
                                                 }
                                             }
@@ -128,10 +111,10 @@ struct MacroTrackingView: View {
                             .padding(.horizontal)
                             .padding(.top)
                             .onAppear {
-                                startAcceptTimer()
+                                startAutoAcceptTimer()
                             }
                             .onDisappear {
-                                stopAcceptTimer()
+                                stopAutoAcceptTimer()
                             }
                         } else if isAnalyzing {
                             // Display Analysis Loading Mode
@@ -148,7 +131,7 @@ struct MacroTrackingView: View {
                             .cornerRadius(16)
                             .padding(.horizontal)
                             .padding(.top)
-                        } else if let selectedImage = selectedImage {
+                        } else if let selectedImage = uploadedImage {
                             // Display Photo Mode
                             VStack(spacing: 16) {
                                 ZStack(alignment: .topTrailing) {
@@ -161,7 +144,7 @@ struct MacroTrackingView: View {
                                     
                                     // X button to clear photo
                                     Button(action: {
-                                        self.selectedImage = nil
+                                        self.uploadedImage = nil
                                     }) {
                                         Image(systemName: "xmark.circle.fill")
                                             .font(.system(size: 24))
@@ -222,7 +205,7 @@ struct MacroTrackingView: View {
                                 
                                 // Analyze Button for Text
                                 Button(action: {
-                                    analyzeText()
+                                    analyzeDescription()
                                 }) {
                                     HStack {
                                         Image(systemName: "text.magnifyingglass")
@@ -342,172 +325,20 @@ struct MacroTrackingView: View {
                         
                         // Macro Numbers - 2 Column Grid Layout
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 8) {
-                            SimpleMacroCard(
-                                title: "Calories",
-                                consumed: caloriesConsumed,
-                                goal: calorieGoal,
-                                unit: "cal",
-                                color: .orange,
-                                lastAdded: lastAddedMeal?.calories
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Calories",
-                                    subcomponents: [
-                                        ("From Carbs", carbsConsumed * 4, "cal"),
-                                        ("From Protein", proteinConsumed * 4, "cal"),
-                                        ("From Fat", fatConsumed * 9, "cal")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Protein",
-                                consumed: proteinConsumed,
-                                goal: proteinGoal,
-                                unit: "g",
-                                color: .red,
-                                lastAdded: lastAddedMeal?.protein
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Protein",
-                                    subcomponents: [
-                                        ("Complete Protein", proteinConsumed * 0.7, "g"),
-                                        ("Incomplete Protein", proteinConsumed * 0.3, "g"),
-                                        ("Essential Amino Acids", proteinConsumed * 0.4, "g")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Carbs",
-                                consumed: carbsConsumed,
-                                goal: carbGoal,
-                                unit: "g",
-                                color: .blue,
-                                lastAdded: lastAddedMeal?.carbs
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Carbohydrates",
-                                    subcomponents: [
-                                        ("Total Sugar", sugarConsumed, "g"),
-                                        ("  • Sucrose", sugarConsumed * 0.4, "g"),
-                                        ("  • Fructose", sugarConsumed * 0.3, "g"),
-                                        ("  • Glucose", sugarConsumed * 0.3, "g"),
-                                        ("Fiber", fiberConsumed, "g"),
-                                        ("Starch", carbsConsumed - sugarConsumed - fiberConsumed, "g")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Fat",
-                                consumed: fatConsumed,
-                                goal: fatGoal,
-                                unit: "g",
-                                color: .green,
-                                lastAdded: lastAddedMeal?.fat
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Fats",
-                                    subcomponents: [
-                                        ("Saturated Fat", fatConsumed * 0.3, "g"),
-                                        ("Monounsaturated Fat", fatConsumed * 0.4, "g"),
-                                        ("Polyunsaturated Fat", fatConsumed * 0.2, "g"),
-                                        ("Trans Fat", fatConsumed * 0.1, "g")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Fiber",
-                                consumed: fiberConsumed,
-                                goal: fiberGoal,
-                                unit: "g",
-                                color: .brown,
-                                lastAdded: lastAddedMeal?.fiber
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Fiber",
-                                    subcomponents: [
-                                        ("Soluble Fiber", fiberConsumed * 0.4, "g"),
-                                        ("Insoluble Fiber", fiberConsumed * 0.6, "g")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Sugar",
-                                consumed: sugarConsumed,
-                                goal: sugarGoal,
-                                unit: "g",
-                                color: .pink,
-                                lastAdded: lastAddedMeal?.sugar
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Sugar",
-                                    subcomponents: [
-                                        ("Sucrose", sugarConsumed * 0.4, "g"),
-                                        ("Fructose", sugarConsumed * 0.3, "g"),
-                                        ("Glucose", sugarConsumed * 0.2, "g"),
-                                        ("Lactose", sugarConsumed * 0.1, "g")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Sodium",
-                                consumed: sodiumConsumed,
-                                goal: sodiumGoal,
-                                unit: "mg",
-                                color: .purple,
-                                lastAdded: lastAddedMeal?.sodium
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Sodium",
-                                    subcomponents: [
-                                        ("Table Salt", sodiumConsumed * 0.6, "mg"),
-                                        ("Natural Sources", sodiumConsumed * 0.2, "mg"),
-                                        ("Processed Foods", sodiumConsumed * 0.2, "mg")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
-                            
-                            SimpleMacroCard(
-                                title: "Vitamins",
-                                consumed: vitaminsConsumed,
-                                goal: vitaminsGoal,
-                                unit: "%",
-                                color: .cyan,
-                                lastAdded: nil
-                            ) {
-                                selectedMacro = MacroDetail(
-                                    title: "Vitamins",
-                                    subcomponents: [
-                                        ("Vitamin A", vitaminsConsumed * 0.15, "% DV"),
-                                        ("Vitamin C", vitaminsConsumed * 0.20, "% DV"),
-                                        ("Vitamin D", vitaminsConsumed * 0.12, "% DV"),
-                                        ("Vitamin E", vitaminsConsumed * 0.10, "% DV"),
-                                        ("Vitamin K", vitaminsConsumed * 0.08, "% DV"),
-                                        ("B-Complex", vitaminsConsumed * 0.25, "% DV"),
-                                        ("  • B12", vitaminsConsumed * 0.08, "% DV"),
-                                        ("  • Folate", vitaminsConsumed * 0.10, "% DV")
-                                    ]
-                                )
-                                showingMacroDetail = true
-                            }
+                            MacroCard(title: "Calories", consumed: trackingManager.currentDayData.caloriesConsumed, goal: userProfile.calorieGoal, unit: "cal", color: .orange, lastAdded: lastAddedMeal?.calories)
+                            MacroCard(title: "Protein", consumed: trackingManager.currentDayData.proteinConsumed, goal: userProfile.proteinGoal, unit: "g", color: .red, lastAdded: lastAddedMeal?.protein)
+                            MacroCard(title: "Carbs", consumed: trackingManager.currentDayData.carbsConsumed, goal: userProfile.carbGoal, unit: "g", color: .blue, lastAdded: lastAddedMeal?.carbs)
+                            MacroCard(title: "Fat", consumed: trackingManager.currentDayData.fatConsumed, goal: userProfile.fatGoal, unit: "g", color: .green, lastAdded: lastAddedMeal?.fat)
+                            MacroCard(title: "Fiber", consumed: trackingManager.currentDayData.fiberConsumed, goal: 25, unit: "g", color: .brown, lastAdded: lastAddedMeal?.fiber)
+                            MacroCard(title: "Sugar", consumed: trackingManager.currentDayData.sugarConsumed, goal: 50, unit: "g", color: .pink, lastAdded: lastAddedMeal?.sugar)
+                            MacroCard(title: "Sodium", consumed: trackingManager.currentDayData.sodiumConsumed, goal: 2300, unit: "mg", color: .purple, lastAdded: lastAddedMeal?.sodium)
+                            MacroCard(title: "Vitamins", consumed: trackingManager.currentDayData.vitaminsConsumed, goal: 100, unit: "%", color: .cyan, lastAdded: nil)
                         }
                     }
                     .padding(.horizontal, 12)
                     
-                    // Analyzed Meals History Section
-                    if !analyzedPhotos.isEmpty || !analyzedTextMeals.isEmpty {
+                    // Today's Meals Section
+                    if !trackingManager.currentDayData.analyzedMeals.isEmpty {
                         VStack(spacing: 16) {
                             HStack {
                                 Text("Today's Meals")
@@ -518,104 +349,105 @@ struct MacroTrackingView: View {
                             }
                             .padding(.horizontal)
                             
-                            // Analyzed Photos
-                            ForEach(Array(analyzedPhotos.enumerated()), id: \.offset) { index, photoMeal in
-                                AnalyzedMealCard(
-                                    image: photoMeal.0,
-                                    meal: photoMeal.1,
-                                    isFlipped: flippedPhotoIndices.contains(index),
-                                    onDelete: {
-                                        mealToDelete = (index: index, meal: photoMeal.1, isPhoto: true)
-                                        showingDeleteConfirmation = true
-                                    },
-                                    onPhotoTap: {
-                                        if flippedPhotoIndices.contains(index) {
-                                            flippedPhotoIndices.remove(index)
-                                        } else {
-                                            flippedPhotoIndices.insert(index)
-                                        }
-                                    }
-                                )
-                            }
-                            
-                            // Analyzed Text Meals
-                            ForEach(Array(analyzedTextMeals.enumerated()), id: \.offset) { index, meal in
-                                AnalyzedMealCard(
-                                    image: nil,
+                            ForEach(trackingManager.currentDayData.analyzedMeals) { meal in
+                                TodayMealCard(
                                     meal: meal,
-                                    isFlipped: true, // Always show macro info for text meals
+                                    isFlipped: flippedPhotoMealIndices.contains(meal.id),
                                     onDelete: {
-                                        mealToDelete = (index: index, meal: meal, isPhoto: false)
+                                        mealToDelete = meal
                                         showingDeleteConfirmation = true
                                     },
-                                    onPhotoTap: { } // No photo to tap
+                                    onPhotoTap: meal.hasPhoto ? {
+                                        if flippedPhotoMealIndices.contains(meal.id) {
+                                            flippedPhotoMealIndices.remove(meal.id)
+                                        } else {
+                                            flippedPhotoMealIndices.insert(meal.id)
+                                        }
+                                    } : nil
                                 )
-                            }
                         }
+                    }
                         .padding(.top, 20)
                     }
                     
                     Spacer(minLength: 100)
                 }
             }
+            .navigationTitle("Macro Tracker")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showingHistory = true
+                    }) {
+                        Image(systemName: "line.horizontal.3")
+                            .font(.title2)
+                            .foregroundColor(.primary)
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Sign Out") {
-                        authManager.signOut()
+                        signOut()
                     }
                     .foregroundColor(.red)
                 }
             }
-            .fullScreenCover(isPresented: $showingImagePicker) {
-                ImagePicker(sourceType: imageSourceType, selectedImage: $selectedImage)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // Save data when app goes to background
+            trackingManager.saveTodaysData()
+        }
+        .sheet(isPresented: $showingImagePicker) {
+            ImagePicker(sourceType: imagePickerSourceType, selectedImage: $uploadedImage)
             }
             .confirmationDialog("Choose Photo Source", isPresented: $showingImageSourcePicker) {
                 Button("Take Photo") {
-                    imageSourceType = .camera
+                imagePickerSourceType = .camera
                     showingImagePicker = true
                 }
                 Button("Choose from Library") {
-                    imageSourceType = .photoLibrary
+                imagePickerSourceType = .photoLibrary
                     showingImagePicker = true
                 }
                 Button("Cancel", role: .cancel) { }
             }
-            .sheet(isPresented: $showingMacroDetail) {
-                if let macro = selectedMacro {
-                    MacroDetailView(macro: macro)
-                }
+        .sheet(isPresented: $showingMealDescription) {
+            MealDescriptionView(mealDescription: $writtenDescription, currentMealDescription: $currentMealDescription)
             }
-            .sheet(isPresented: $showingMealDescription) {
-                MealDescriptionView(mealDescription: $mealDescriptionText, currentMealDescription: $currentMealDescription)
-            }
-            .alert("Delete Meal", isPresented: $showingDeleteConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    mealToDelete = nil
-                }
-                Button("Delete", role: .destructive) {
-                    confirmDeleteMeal()
-                }
-            } message: {
-                Text("Are you sure you want to delete this meal? This will remove its macros from your daily total.")
-            }
+        .sheet(isPresented: $showingHistory) {
+            HistoryView()
         }
-    }
-    
-    private func addMacros(calories: Double, protein: Double, carbs: Double, fat: Double) {
-        caloriesConsumed += calories
-        proteinConsumed += protein
-        carbsConsumed += carbs
-        fatConsumed += fat
+        .alert("Delete Meal", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {
+                mealToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                if let meal = mealToDelete {
+                    trackingManager.removeMeal(meal.id)
+                    mealToDelete = nil
+                    
+                    // Clear last added meal if it was the one being deleted
+                    if let lastMeal = lastAddedMeal,
+                       lastMeal.mealName == meal.mealName {
+                        clearLastAddedMeal()
+                    }
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete this meal? This will remove its macros from your daily total.")
+        }
+        .onAppear {
+            startAutoAcceptTimerIfNeeded()
+        }
     }
     
     private func analyzePhoto() {
         isAnalyzing = true
         
-        // Simulate AI analysis delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            // Mock analysis result - replace with actual AI API call
-            let mockResult = MealAnalysisResult(
+        // Simulate analysis (replace with real API call)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let mockAnalysis = MealAnalysisResult(
                 mealName: "Grilled Chicken Salad",
                 calories: 350,
                 protein: 35,
@@ -623,403 +455,110 @@ struct MacroTrackingView: View {
                 fat: 18,
                 fiber: 8,
                 sugar: 6,
-                sodium: 420,
-                description: "A healthy grilled chicken breast over mixed greens with vegetables and light dressing."
+                sodium: 450,
+                description: "A healthy grilled chicken breast served over mixed greens with tomatoes and cucumber"
             )
             
-            self.analyzedMealData = mockResult
-            self.lastAddedMeal = mockResult  // Show "+ X added" during accept phase
-            self.isAnalyzing = false
+            currentAnalysis = mockAnalysis
+            isAnalyzing = false
         }
     }
     
-    private func analyzeText() {
+    private func analyzeDescription() {
         isAnalyzing = true
         
-        // Simulate AI analysis delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            // Mock analysis result based on text - replace with actual AI API call
-            let mockResult = MealAnalysisResult(
-                mealName: "Mixed Bowl Meal",
-                calories: 280,
-                protein: 22,
-                carbs: 25,
-                fat: 12,
-                fiber: 5,
-                sugar: 8,
-                sodium: 350,
+        // Simulate analysis (replace with real API call)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            let mockAnalysis = MealAnalysisResult(
+                mealName: "Pasta with Marinara",
+                calories: 420,
+                protein: 12,
+                carbs: 75,
+                fat: 8,
+                fiber: 4,
+                sugar: 12,
+                sodium: 680,
                 description: currentMealDescription
             )
             
-            self.analyzedMealData = mockResult
-            self.lastAddedMeal = mockResult  // Show "+ X added" during accept phase
-            self.isAnalyzing = false
+            currentAnalysis = mockAnalysis
+            isAnalyzing = false
         }
-    }
-    
-    private func startAcceptTimer() {
-        acceptProgress = 0.0
-        acceptTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            acceptProgress += 0.00667 // Increment to reach 1.0 in 15 seconds (1.0 / 150 intervals)
-            
-            if acceptProgress >= 1.0 {
-                acceptMeal()
-            }
-        }
-    }
-    
-    private func stopAcceptTimer() {
-        acceptTimer?.invalidate()
-        acceptTimer = nil
-        acceptProgress = 0.0
     }
     
     private func acceptMeal() {
-        guard let meal = analyzedMealData else { return }
+        guard let analysis = currentAnalysis else { return }
         
-        stopAcceptTimer()
+        // Add meal to tracking manager
+        let hasPhoto = uploadedImage != nil
+        trackingManager.addMeal(analysis, hasPhoto: hasPhoto)
         
-        // Add to daily tracking
-        addMacros(
-            calories: meal.calories,
-            protein: meal.protein,
-            carbs: meal.carbs,
-            fat: meal.fat
-        )
-        fiberConsumed += meal.fiber
-        sugarConsumed += meal.sugar
-        sodiumConsumed += meal.sodium
+        // Set last added meal for preview display
+        lastAddedMeal = analysis
         
-        // Save to history
-        if let image = selectedImage {
-            analyzedPhotos.append((image, meal))
-        } else {
-            analyzedTextMeals.append(meal)
-        }
-        
-        // Reset state and clear "added" display immediately
-        analyzedMealData = nil
-        selectedImage = nil
-        currentMealDescription = ""
-        lastAddedMeal = nil  // Immediately revert to "/ X goal" format
+        // Clear temporary preview after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            clearLastAddedMeal()
+}
+
+        // Clean up
+        resetToDefaultState()
+        stopAutoAcceptTimer()
     }
     
     private func deleteMeal() {
-        stopAcceptTimer()
-        analyzedMealData = nil
-        selectedImage = nil
+        resetToDefaultState()
+        stopAutoAcceptTimer()
+    }
+    
+    private func resetToDefaultState() {
+        uploadedImage = nil
+        writtenDescription = ""
+        currentAnalysis = nil
         currentMealDescription = ""
-        lastAddedMeal = nil  // Clear "added" display when deleting
+        showingAcceptDeleteView = false
+        isAnalyzing = false
     }
     
-    private func confirmDeleteMeal() {
-        guard let mealToDelete = mealToDelete else { return }
-        
-        let meal = mealToDelete.meal
-        let index = mealToDelete.index
-        let isPhoto = mealToDelete.isPhoto
-        
-        // Subtract macros from daily total
-        subtractMacros(
-            calories: meal.calories,
-            protein: meal.protein,
-            carbs: meal.carbs,
-            fat: meal.fat
-        )
-        fiberConsumed = max(0, fiberConsumed - meal.fiber)
-        sugarConsumed = max(0, sugarConsumed - meal.sugar)
-        sodiumConsumed = max(0, sodiumConsumed - meal.sodium)
-        
-        // Remove from appropriate array
-        if isPhoto {
-            analyzedPhotos.remove(at: index)
-            flippedPhotoIndices.remove(index)
-        } else {
-            analyzedTextMeals.remove(at: index)
-        }
-        
-        // Clear selection
-        self.mealToDelete = nil
+    private func clearLastAddedMeal() {
+        lastAddedMeal = nil
     }
     
-    private func subtractMacros(calories: Double, protein: Double, carbs: Double, fat: Double) {
-        caloriesConsumed = max(0, caloriesConsumed - calories)
-        proteinConsumed = max(0, proteinConsumed - protein)
-        carbsConsumed = max(0, carbsConsumed - carbs)
-        fatConsumed = max(0, fatConsumed - fat)
-    }
-}
-
-struct AnalyzedMealCard: View {
-    let image: UIImage?
-    let meal: MealAnalysisResult
-    let isFlipped: Bool
-    let onDelete: () -> Void
-    let onPhotoTap: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            // Header with meal name and delete button
-            HStack {
-                Text(meal.mealName)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 16))
-                        .foregroundColor(.red)
-                }
-            }
+    private func startAutoAcceptTimer() {
+        stopAutoAcceptTimer()
+        acceptTimerProgress = 0
+        
+        autoAcceptTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            acceptTimerProgress += 0.1 / 15.0 // 15 seconds total
             
-            // Photo or Macro List (flippable for photos)
-            if let image = image {
-                if isFlipped {
-                    // Show Macro List
-                    VStack(spacing: 8) {
-                        MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
-                        MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
-                        MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
-                        MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
-                        MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
-                        MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
-                        MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
-                    }
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
-                    .cornerRadius(12)
-                    .onTapGesture {
-                        onPhotoTap()
-                    }
-                } else {
-                    // Show Photo
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(height: 120)
-                        .clipped()
-                        .cornerRadius(12)
-                        .onTapGesture {
-                            onPhotoTap()
-                        }
-                }
-            } else {
-                // Text meals always show macro list
-                VStack(spacing: 8) {
-                    MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
-                    MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
-                    MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
-                    MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
-                    MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
-                    MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
-                    MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
-                }
-                .padding(.vertical, 8)
-            }
-        }
-        .padding(16)
-        .background(Color(.systemGray6))
-        .cornerRadius(16)
-        .padding(.horizontal)
+            if acceptTimerProgress >= 1.0 {
+                acceptMeal()
     }
-}
-
-struct MacroRow: View {
-    let title: String
-    let value: Int
-    let unit: String
-    let color: Color
-    
-    var body: some View {
-        HStack {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-            
-            Text(title)
-                .font(.body)
-                .foregroundColor(.primary)
-            
-            Spacer()
-            
-            Text("\(value) \(unit)")
-                .font(.body)
-                .fontWeight(.medium)
-                .foregroundColor(.secondary)
         }
-        .padding(.vertical, 2)
     }
-}
-
-struct MacroDetail {
-    let title: String
-    let subcomponents: [(String, Double, String)] // (name, amount, unit)
-}
-
-struct SimpleMacroCard: View {
-    let title: String
-    let consumed: Double
-    let goal: Double
-    let unit: String
-    let color: Color
-    let lastAdded: Double?
-    let onTap: () -> Void
     
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 12) {
-                // Macro Name on Top
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(color)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                
-                // Numbers in Middle
-                VStack(spacing: 3) {
-                    Text("\(Int(consumed))")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundColor(.primary)
-                    
-                    if let lastAdded = lastAdded {
-                        Text("+ \(Int(lastAdded)) \(unit) added")
-                            .font(.caption)
-                            .foregroundColor(.green)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    } else {
-                    Text("/ \(Int(goal)) \(unit)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    }
-                }
-                
-                // Small chevron indicator
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .opacity(0.5)
-            }
-            .frame(height: 75)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-            .background(Color(.systemGray6))
-            .cornerRadius(14)
+    private func stopAutoAcceptTimer() {
+        autoAcceptTimer?.invalidate()
+        autoAcceptTimer = nil
+        acceptTimerProgress = 0
+    }
+    
+    private func startAutoAcceptTimerIfNeeded() {
+        if currentAnalysis != nil {
+            startAutoAcceptTimer()
         }
-        .buttonStyle(PlainButtonStyle())
-        .aspectRatio(1.0, contentMode: .fit)
     }
-}
-
-struct MacroDetailView: View {
-    let macro: MacroDetail
-    @Environment(\.dismiss) private var dismiss
     
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Text(macro.title)
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .padding(.top)
-                
-                Text("Breakdown")
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-                
-                VStack(spacing: 12) {
-                    ForEach(macro.subcomponents.indices, id: \.self) { index in
-                        let component = macro.subcomponents[index]
-                        HStack {
-                            Text(component.0)
-                                .font(.body)
-                                .foregroundColor(.primary)
-                            
-                            Spacer()
-                            
-                            Text("\(component.1.formatted(.number.precision(.fractionLength(1)))) \(component.2)")
-                                .font(.body)
-                                .fontWeight(.medium)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 8)
-                        .background(Color(.systemGray6))
-                        .cornerRadius(8)
-                    }
-                }
-                .padding(.horizontal)
-                
-                Spacer()
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
+    private func signOut() {
+        do {
+            try Auth.auth().signOut()
+        } catch {
+            print("Error signing out: \(error)")
         }
     }
 }
 
-// Fullscreen Camera without extra buttons
-struct ImagePicker: UIViewControllerRepresentable {
-    @Environment(\.dismiss) private var dismiss
-    let sourceType: UIImagePickerController.SourceType
-    @Binding var selectedImage: UIImage?
-    
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = sourceType
-        picker.allowsEditing = false
-        picker.delegate = context.coordinator
-        // Only set fullScreen for camera, photo library uses default presentation
-        if sourceType == .camera {
-            picker.modalPresentationStyle = .fullScreen
-            picker.navigationBar.isHidden = true
-            picker.toolbar.isHidden = true
-        }
-        return picker
-    }
-    
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let parent: ImagePicker
-        
-        init(_ parent: ImagePicker) {
-            self.parent = parent
-        }
-        
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
-            if let image = info[.originalImage] as? UIImage {
-                parent.selectedImage = image
-            }
-            picker.dismiss(animated: true)
-            parent.dismiss()
-        }
-        
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            picker.dismiss(animated: true)
-            parent.dismiss()
-        }
-    }
-}
-
+// Add the missing MealDescriptionView
 struct MealDescriptionView: View {
     @Binding var mealDescription: String
     @Binding var currentMealDescription: String
@@ -1072,10 +611,9 @@ struct MealDescriptionView: View {
                     Button(action: {
                         mealDescription = tempDescription
                         currentMealDescription = tempDescription
-                        // Here you would typically process the description and estimate macros
                         dismiss()
                     }) {
-                        Text("Analyze Meal")
+                        Text("Done")
                             .font(.headline)
                             .fontWeight(.semibold)
                             .foregroundColor(.white)
@@ -1085,14 +623,6 @@ struct MealDescriptionView: View {
                             .cornerRadius(12)
                     }
                     .disabled(tempDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        Text("Cancel")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 30)
@@ -1100,13 +630,6 @@ struct MealDescriptionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        mealDescription = tempDescription
-                        currentMealDescription = tempDescription
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
                     }
@@ -1116,6 +639,170 @@ struct MealDescriptionView: View {
     }
 }
 
+struct TodayMealCard: View {
+    let meal: StoredMealData
+    let isFlipped: Bool
+    let onDelete: () -> Void
+    let onPhotoTap: (() -> Void)?
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            // Header with meal name and delete button
+            HStack {
+                Text(meal.mealName)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16))
+                        .foregroundColor(.red)
+                }
+            }
+            
+            // Photo placeholder or Macro List (flippable for photos)
+            if meal.hasPhoto {
+                if isFlipped {
+                    // Show Macro List
+                    VStack(spacing: 8) {
+                        MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
+                        MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
+                        MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
+                        MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
+                        MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
+                        MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
+                        MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
+                    }
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(12)
+                    .onTapGesture {
+                        onPhotoTap?()
+                    }
+                } else {
+                    // Show Photo Placeholder (in real app, would load from Firebase Storage)
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray5))
+                        .frame(height: 120)
+                        .overlay(
+                            VStack(spacing: 8) {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 30))
+                                    .foregroundColor(.gray)
+                                Text("Photo")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        )
+                        .onTapGesture {
+                            onPhotoTap?()
+                        }
+                }
+            } else {
+                // Text meals always show macro list
+                VStack(spacing: 8) {
+                    MacroRow(title: "Calories", value: Int(meal.calories), unit: "cal", color: .orange)
+                    MacroRow(title: "Protein", value: Int(meal.protein), unit: "g", color: .red)
+                    MacroRow(title: "Carbs", value: Int(meal.carbs), unit: "g", color: .blue)
+                    MacroRow(title: "Fat", value: Int(meal.fat), unit: "g", color: .green)
+                    MacroRow(title: "Fiber", value: Int(meal.fiber), unit: "g", color: .brown)
+                    MacroRow(title: "Sugar", value: Int(meal.sugar), unit: "g", color: .pink)
+                    MacroRow(title: "Sodium", value: Int(meal.sodium), unit: "mg", color: .purple)
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .cornerRadius(16)
+        .padding(.horizontal)
+    }
+}
+
+struct MacroCard: View {
+    let title: String
+    let consumed: Double
+    let goal: Double
+    let unit: String
+    let color: Color
+    let lastAdded: Double?
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Macro Name on Top
+            Text(title)
+                .font(.headline)
+                .foregroundColor(color)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            
+            // Numbers in Middle
+            VStack(spacing: 3) {
+                Text("\(Int(consumed))")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                
+                if let added = lastAdded, added > 0 {
+                    Text("+ \(Int(added)) added")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                } else {
+                    Text("/ \(Int(goal)) \(unit)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+        }
+        .frame(height: 75)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(Color(.systemGray6))
+        .cornerRadius(14)
+    }
+}
+
+struct MacroRow: View {
+    let title: String
+    let value: Int
+    let unit: String
+    let color: Color
+    
+    var body: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 12, height: 12)
+                
+                Text(title)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+            }
+            
+            Spacer()
+            
+            Text("\(value) \(unit)")
+                .font(.body)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+}
+
 #Preview {
-    MacroTrackingView()
+    MacroTrackingView(userProfile: UserProfile())
 } 

@@ -156,4 +156,25 @@ class UserProfile: ObservableObject {
         guard let bmr = calculateBMR() else { return nil }
         return bmr * activityLevel
     }
+    
+    // MARK: - Macro Goals
+    var calorieGoal: Double {
+        return calculateDailyCalories() ?? 2000
+    }
+    
+    var proteinGoal: Double {
+        // 1g per lb of body weight, or 0.8g per lb for sedentary
+        guard let weight = Double(currentWeight), weight > 0 else { return 150 }
+        return weight * 1.0
+    }
+    
+    var carbGoal: Double {
+        // 45-65% of calories from carbs, using 50% as default
+        return (calorieGoal * 0.5) / 4 // 4 calories per gram of carbs
+    }
+    
+    var fatGoal: Double {
+        // 20-35% of calories from fat, using 25% as default
+        return (calorieGoal * 0.25) / 9 // 9 calories per gram of fat
+    }
 } 

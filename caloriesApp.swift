@@ -85,8 +85,8 @@ struct caloriesApp: App {
                         .environmentObject(authManager)
                         .environmentObject(userProfile)
                 } else if userProfile.hasCompletedOnboarding {
-                MacroTrackingView()
-                    .environmentObject(authManager)
+                    MacroTrackingView(userProfile: userProfile)
+                        .environmentObject(authManager)
                         .environmentObject(userProfile)
                 } else {
                     OnboardingFlow(userProfile: userProfile)
