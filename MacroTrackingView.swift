@@ -17,6 +17,8 @@ struct MacroTrackingView: View {
     @State private var showingMacroDetail = false
     @State private var showingMealDescription = false
     @State private var mealDescriptionText = ""
+    @State private var selectedImage: UIImage?
+    @State private var currentMealDescription: String = ""
     
     // Daily goals (can be made customizable later)
     private let calorieGoal: Double = 2000
@@ -32,91 +34,151 @@ struct MacroTrackingView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    // Upload Photo Section
-                    HStack(spacing: 12) {
-                        // Upload Photo Button (Left Half)
-                        Button(action: {
-                            showingImageSourcePicker = true
-                        }) {
-                            VStack(spacing: 12) {
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.blue)
+                    // Dynamic Upload Photo/Description Section
+                    VStack(spacing: 0) {
+                        if let selectedImage = selectedImage {
+                            // Display Photo Mode
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: selectedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(height: 200)
+                                    .clipped()
+                                    .cornerRadius(16)
                                 
-                                Text("Upload Photo of Meal")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.primary)
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                                
-                                Text("Take a photo")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
+                                // X button to clear photo
+                                Button(action: {
+                                    self.selectedImage = nil
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 24))
+                                        .foregroundColor(.white)
+                                        .background(Color.black.opacity(0.6))
+                                        .clipShape(Circle())
+                                }
+                                .padding(12)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.vertical, 24)
-                            .padding(.horizontal, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(.systemGray6))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(Color.blue.opacity(0.3), lineWidth: 2)
-                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                                    )
-                            )
-                        }
-                        .frame(height: 140)
-                        
-                        // OR Separator
-                        VStack {
-                            Text("OR")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(width: 30)
-                        
-                        // Describe Meal Button (Right Half)
-                        Button(action: {
-                            showingMealDescription = true
-                        }) {
-                            VStack(spacing: 12) {
-                                Image(systemName: "text.bubble.fill")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.green)
+                            .padding(.horizontal)
+                            .padding(.top)
+                        } else if !currentMealDescription.isEmpty {
+                            // Display Description Mode
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    Text("Meal Description")
+                                        .font(.headline)
+                                        .foregroundColor(.primary)
+                                    
+                                    Spacer()
+                                    
+                                    // X button to clear description
+                                    Button(action: {
+                                        currentMealDescription = ""
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(.gray)
+                                    }
+                                }
                                 
-                                Text("Describe Meal")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
+                                Text(currentMealDescription)
+                                    .font(.body)
                                     .foregroundColor(.primary)
-                                    .multilineTextAlignment(.center)
-                                    .lineLimit(2)
-                                
-                                Text("Type what you ate")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .multilineTextAlignment(.center)
+                                    .padding(16)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(12)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.vertical, 24)
-                            .padding(.horizontal, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(.systemGray6))
-                                    .overlay(
+                            .padding(.horizontal)
+                            .padding(.top)
+                        } else {
+                            // Default Two Button Mode
+                            HStack(spacing: 12) {
+                                // Upload Photo Button (Left Half)
+                                Button(action: {
+                                    showingImageSourcePicker = true
+                                }) {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "camera.fill")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(.blue)
+                                        
+                                        Text("Upload Photo of Meal")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.primary)
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(2)
+                                        
+                                        Text("Take a photo")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .padding(.vertical, 24)
+                                    .padding(.horizontal, 12)
+                                    .background(
                                         RoundedRectangle(cornerRadius: 16)
-                                            .stroke(Color.green.opacity(0.3), lineWidth: 2)
-                                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                                            .fill(Color(.systemGray6))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 16)
+                                                    .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                                                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                                            )
                                     )
-                            )
+                                }
+                                .frame(height: 140)
+                                
+                                // OR Separator
+                                VStack {
+                                    Text("OR")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(width: 30)
+                                
+                                // Describe Meal Button (Right Half)
+                                Button(action: {
+                                    showingMealDescription = true
+                                }) {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "text.bubble.fill")
+                                            .font(.system(size: 32))
+                                            .foregroundColor(.green)
+                                        
+                                        Text("Describe Meal")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.primary)
+                                            .multilineTextAlignment(.center)
+                                            .lineLimit(2)
+                                        
+                                        Text("Type what you ate")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .multilineTextAlignment(.center)
+                                    }
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .padding(.vertical, 24)
+                                    .padding(.horizontal, 12)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .fill(Color(.systemGray6))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 16)
+                                                    .stroke(Color.green.opacity(0.3), lineWidth: 2)
+                                                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
+                                            )
+                                    )
+                                }
+                                .frame(height: 140)
+                            }
+                            .padding(.horizontal)
+                            .padding(.top)
                         }
-                        .frame(height: 140)
                     }
-                    .padding(.horizontal)
-                    .padding(.top)
                     
                     // Today's Data Section
                     VStack(spacing: 16) {
@@ -301,7 +363,7 @@ struct MacroTrackingView: View {
                 }
             }
             .fullScreenCover(isPresented: $showingImagePicker) {
-                ImagePicker(sourceType: imageSourceType)
+                ImagePicker(sourceType: imageSourceType, selectedImage: $selectedImage)
             }
             .confirmationDialog("Choose Photo Source", isPresented: $showingImageSourcePicker) {
                 Button("Take Photo") {
@@ -320,7 +382,7 @@ struct MacroTrackingView: View {
                 }
             }
             .sheet(isPresented: $showingMealDescription) {
-                MealDescriptionView(mealDescription: $mealDescriptionText)
+                MealDescriptionView(mealDescription: $mealDescriptionText, currentMealDescription: $currentMealDescription)
             }
         }
     }
@@ -446,6 +508,7 @@ struct MacroDetailView: View {
 struct ImagePicker: UIViewControllerRepresentable {
     @Environment(\.dismiss) private var dismiss
     let sourceType: UIImagePickerController.SourceType
+    @Binding var selectedImage: UIImage?
     
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
@@ -475,7 +538,9 @@ struct ImagePicker: UIViewControllerRepresentable {
         }
         
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
-            // Handle the selected image here
+            if let image = info[.originalImage] as? UIImage {
+                parent.selectedImage = image
+            }
             picker.dismiss(animated: true)
             parent.dismiss()
         }
@@ -489,6 +554,7 @@ struct ImagePicker: UIViewControllerRepresentable {
 
 struct MealDescriptionView: View {
     @Binding var mealDescription: String
+    @Binding var currentMealDescription: String
     @Environment(\.dismiss) private var dismiss
     @State private var tempDescription: String = ""
     
@@ -537,6 +603,7 @@ struct MealDescriptionView: View {
                 VStack(spacing: 12) {
                     Button(action: {
                         mealDescription = tempDescription
+                        currentMealDescription = tempDescription
                         // Here you would typically process the description and estimate macros
                         dismiss()
                     }) {
@@ -567,6 +634,7 @@ struct MealDescriptionView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         mealDescription = tempDescription
+                        currentMealDescription = tempDescription
                         dismiss()
                     }
                 }
